@@ -17,7 +17,7 @@ namespace eBayNotifier
 {
     public class Checker
     {
-        public record EbayListing(long ListingNumber, string Link, string Title, string Description, DateTime EndTime);
+        public record EbayListing(long ListingNumber, string Link, string Title, string Description, DateTime EndTime, int BidCount, double CurrentPrice);
 
         [FunctionName("eBayNotifierTimer")]
         public async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
@@ -25,9 +25,7 @@ namespace eBayNotifier
             log.LogInformation($"eBay Notifier Timer function executed at: {DateTime.Now}");
             try
             {
-                var listings = await GetListings(log);
-                await AlertNewListings(log, listings);
-                await AlertEndingSoonListings(log, listings);
+                await SendAlerts(log);
             }
             catch (Exception e)
             {
@@ -42,9 +40,7 @@ namespace eBayNotifier
             log.LogInformation($"Run Check Web function executed at: {DateTime.Now}");
             try
             {
-                var listings = await GetListings(log);
-                await AlertNewListings(log, listings);
-                await AlertEndingSoonListings(log, listings);
+                await SendAlerts(log);
                 return new OkObjectResult("Check Run");
             }
             catch (Exception e)
@@ -91,6 +87,8 @@ namespace eBayNotifier
                     var link = item.Element("link")?.Value ?? string.Empty;
                     var description = item.Element("description")?.Value ?? string.Empty;
                     var javaEndTime = item.Element("EndTime")?.Value ?? string.Empty;
+                    var currentPriceText = item.Element("CurrentPrice")?.Value ?? string.Empty;
+                    var bidCountText = item.Element("bidCount")?.Value ?? string.Empty;
 
                     if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(javaEndTime))
                     {
@@ -107,10 +105,20 @@ namespace eBayNotifier
                             continue;
                         }
 
+                        if (!double.TryParse(currentPriceText, out var currentPrice))
+                        {
+                            continue;
+                        }
+
+                        if (!int.TryParse(bidCountText, out var bidCount))
+                        {
+                            continue;
+                        }
+
                         var endDate = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
                         endDate = endDate.AddMilliseconds(javaTimestamp).ToLocalTime();
 
-                        items.Add(new EbayListing(itemNumber, link, title, description, endDate));
+                        items.Add(new EbayListing(itemNumber, link, title, description, endDate, bidCount, (currentPrice / 100)));
                     }
                 }
             }
@@ -118,68 +126,187 @@ namespace eBayNotifier
             return items;
         }
 
-        private static async Task AlertNewListings(ILogger log, List<EbayListing> listings)
+        private async Task SendAlerts(ILogger log)
         {
-            var notifiedNew = await Blobs.ReadAppDataBlob<List<long>>("newAlert.dat", log);
-            var madeChanges = false;
+            var listings = await GetListings(log);
+
+            var blobsChanged = false;
+            var newListingAlerts = await Blobs.ReadAppDataBlob<List<long>>("newAlert.dat", log);
+            var endingSoonAlerts = await Blobs.ReadAppDataBlob<List<long>>("endingSoonAlert.dat", log);
+            var titleChangeAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, string>>("titleChangeAlert.dat", log);
+            var bidAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, (int, double)>>("bidAlert.dat", log);
+
             foreach (var ebayListing in listings)
             {
-                if (!notifiedNew.Contains(ebayListing.ListingNumber))
+                if (await NotifyNewListings(log, newListingAlerts, ebayListing))
                 {
-                    var emailSubject = $"New eBay Listing - {ebayListing.Title}";
-                    var emailBody = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
+                    blobsChanged = true;
+                }
 
-                    await Emails.SendEmail(emailSubject, emailText, emailBody, false, log);
-                    await Emails.SendEmail(emailSubject, emailText, emailBody, true, log);
+                if (await NotifyEndingSoon(log, newListingAlerts, ebayListing))
+                {
+                    blobsChanged = true;
+                }
 
-                    notifiedNew.Add(ebayListing.ListingNumber);
-                    madeChanges = true;
+                if (await NotifyTitleChange(log, titleChangeAlerts, ebayListing))
+                {
+                    blobsChanged = true;
+                }
+
+                if (await NotifyBid(log, bidAlerts, ebayListing))
+                {
+                    blobsChanged = true;
                 }
             }
 
-            if (notifiedNew.Any(x => !listings.Any(l => l.ListingNumber == x)))
+            if (RemoveFinishedListingsFromAlerts(listings, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
             {
-                notifiedNew.RemoveAll(x => !listings.Any(l => l.ListingNumber == x));
-                madeChanges = true;
+                blobsChanged = true;
             }
 
-            if (madeChanges)
+            if (blobsChanged)
             {
-                await Blobs.WriteAppDataBlob(notifiedNew, "newAlert.dat", log);
+                await Blobs.WriteAppDataBlob(newListingAlerts, "newAlert.dat", log);
+                await Blobs.WriteAppDataBlob(endingSoonAlerts, "endingSoonAlert.dat", log);
+                await Blobs.WriteAppDataBlob(titleChangeAlerts, "titleChangeAlert.dat", log);
             }
         }
 
-        private static async Task AlertEndingSoonListings(ILogger log, List<EbayListing> listings)
+        private static async Task<bool> NotifyNewListings(ILogger log, List<long> alerts, EbayListing ebayListing)
         {
-            var notifiedEndingSoon = await Blobs.ReadAppDataBlob<List<long>>("endingSoonAlert.dat", log);
-            var madeChanges = false;
-            foreach (var ebayListing in listings.Where(x => x.EndTime < DateTime.Now.AddDays(-1)))
+            if (!alerts.Contains(ebayListing.ListingNumber))
             {
-                if (!notifiedEndingSoon.Contains(ebayListing.ListingNumber))
-                {
-                    var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
-                    var emailBody = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
+                var emailSubject = $"New eBay Listing - {ebayListing.Title}";
+                var emailHtml = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
 
-                    await Emails.SendEmail(emailSubject, emailText, emailBody, false, log);
-                    await Emails.SendEmail(emailSubject, emailText, emailBody, true, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
 
-                    notifiedEndingSoon.Add(ebayListing.ListingNumber);
-                    madeChanges = true;
-                }
+                alerts.Add(ebayListing.ListingNumber);
+                return true;
             }
 
-            if (notifiedEndingSoon.Any(x => !listings.Any(l => l.ListingNumber == x)))
+            return false;
+        }
+
+        private static async Task<bool> NotifyEndingSoon(ILogger log, List<long> alerts, EbayListing ebayListing)
+        {
+            if (ebayListing.EndTime < DateTime.Now.AddDays(-1) && !alerts.Contains(ebayListing.ListingNumber))
             {
-                notifiedEndingSoon.RemoveAll(x => !listings.Any(l => l.ListingNumber == x));
-                madeChanges = true;
+                var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
+                var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+
+                alerts.Add(ebayListing.ListingNumber);
+                return true;
             }
 
-            if (madeChanges)
+            return false;
+        }
+
+        private static async Task<bool> NotifyTitleChange(ILogger log, Dictionary<long, string> alerts, EbayListing ebayListing)
+        {
+            if (!alerts.ContainsKey(ebayListing.ListingNumber))
             {
-                await Blobs.WriteAppDataBlob(notifiedEndingSoon, "endingSoonAlert.dat", log);
+                alerts.Add(ebayListing.ListingNumber, ebayListing.Title);
+                return true;
             }
+
+            if (!alerts[ebayListing.ListingNumber].Equals(ebayListing.Title))
+            {
+                var emailSubject = $"eBay Listing Title Update - {ebayListing.Title}";
+                var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>Title: {ebayListing.Title}</h2><p>Old Title: {alerts[ebayListing.ListingNumber]}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                var emailText = $"eBay Listing Title Update\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nOld Title: {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
+
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+
+                alerts[ebayListing.ListingNumber] = ebayListing.Title;
+                return true;
+            }
+
+            return false;
+        }
+
+        private static async Task<bool> NotifyBid(ILogger log, Dictionary<long, (int BidCount, double CurrentPrice)> alerts, EbayListing ebayListing)
+        {
+            if (!alerts.ContainsKey(ebayListing.ListingNumber))
+            {
+                alerts.Add(ebayListing.ListingNumber, (ebayListing.BidCount, ebayListing.CurrentPrice));
+                return true;
+            }
+
+            if (!alerts[ebayListing.ListingNumber].BidCount.Equals(ebayListing.BidCount))
+            {
+                var emailSubject = $"eBay Listing New Bid - {ebayListing.Title}";
+                var emailHtml = $"<h1>eBay Listing New Bid<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                var emailText = $"eBay Listing New Bid\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+
+                alerts[ebayListing.ListingNumber] = (ebayListing.BidCount, ebayListing.CurrentPrice);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool RemoveFinishedListingsFromAlerts(List<EbayListing> listings, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
+        {
+            var removedItems = false;
+
+            if (RemoveFinishedListingFromAlerts(listings, newListingAlerts))
+            {
+                removedItems = true;
+            }
+
+            if (RemoveFinishedListingFromAlerts(listings, endingSoonAlerts))
+            {
+                removedItems = true;
+            }
+
+            if (RemoveFinishedListingFromAlerts(listings, titleChangeAlerts))
+            {
+                removedItems = true;
+            }
+
+            if (RemoveFinishedListingFromAlerts(listings, bidAlerts))
+            {
+                removedItems = true;
+            }
+
+            return removedItems;
+        }
+
+        private static bool RemoveFinishedListingFromAlerts(List<EbayListing> listings, List<long> alerts)
+        {
+            var removedItems = false;
+
+            foreach (var key in alerts.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList())
+            {
+                alerts.Remove(key);
+                removedItems = true;
+            }
+
+            return removedItems;
+        }
+
+        private static bool RemoveFinishedListingFromAlerts<T>(List<EbayListing> listings, Dictionary<long, T> alerts)
+        {
+            var removedItems = false;
+
+            foreach (var key in alerts.Keys.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList())
+            {
+                alerts.Remove(key);
+                removedItems = true;
+            }
+
+            return removedItems;
         }
     }
 }

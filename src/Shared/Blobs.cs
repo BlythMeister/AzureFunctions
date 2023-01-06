@@ -20,10 +20,18 @@ namespace Shared
             }
 
             log.LogInformation($"Loading file {file}");
-            await using var readStream = await blobClient.OpenReadAsync();
-            using var reader = new StreamReader(readStream);
-            var blobContent = await reader.ReadToEndAsync();
-            return JsonConvert.DeserializeObject<T>(blobContent) ?? new T();
+            try
+            {
+                await using var readStream = await blobClient.OpenReadAsync();
+                using var reader = new StreamReader(readStream);
+                var blobContent = await reader.ReadToEndAsync();
+                return JsonConvert.DeserializeObject<T>(blobContent) ?? new T();
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, $"Error loading {file}");
+                return new T();
+            }
         }
 
         public static async Task WriteAppDataBlob<T>(T saveObject, string file, ILogger log)
