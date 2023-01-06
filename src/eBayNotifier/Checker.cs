@@ -146,7 +146,7 @@ namespace eBayNotifier
                     blobsChanged = true;
                 }
 
-                if (await NotifyEndingSoon(log, newListingAlerts, ebayListing))
+                if (await NotifyEndingSoon(log, endingSoonAlerts, ebayListing))
                 {
                     blobsChanged = true;
                 }
