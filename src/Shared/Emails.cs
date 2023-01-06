@@ -19,7 +19,7 @@ public static class Emails
         var emailToName = toMe ? Environment.GetEnvironmentVariable("NOTIFY_ME_TO_NAME") : Environment.GetEnvironmentVariable("NOTIFY_TO_NAME");
         var apiKey = Environment.GetEnvironmentVariable("SENDGRID_KEY");
 
-        log.LogInformation($"Sending email to {emailToAddress} from {emailFromAddress} subject {subject}");
+        log.LogInformation("Sending email to {emailToAddress} from {emailFromAddress} subject {subject}", emailToAddress, emailFromAddress, subject);
 
         var client = new SendGridClient(apiKey);
         var from = new EmailAddress(emailFromAddress, emailFromName);

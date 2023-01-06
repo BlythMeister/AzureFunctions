@@ -20,9 +20,9 @@ namespace eBayNotifier
         public record EbayListing(long ListingNumber, string Link, string Title, string Description, DateTime EndTime, int BidCount, double CurrentPrice);
 
         [FunctionName("eBayNotifierTimer")]
-        public async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunTimer([TimerTrigger("0 */10 * * * *")] TimerInfo myTimer, ILogger log)
         {
-            log.LogInformation($"eBay Notifier Timer function executed at: {DateTime.Now}");
+            log.LogInformation("eBay Notifier Timer function executed at: {Date}", DateTime.Now);
             try
             {
                 await SendAlerts(log);
@@ -30,14 +30,14 @@ namespace eBayNotifier
             catch (Exception e)
             {
                 log.LogError(e, "Error in check/email");
-                await Emails.SendEmail("EBAY NOTIFIER ERROR", $"Error running eBay Notifier\r\n{e}", $"Error running eBay Notifier<br>{e}", true, log);
+                await Emails.SendEmail("EBAY NOTIFIER ERROR", $"Error running eBay Notifier\r\n{e}", $"Error running eBay Notifier<br>{e.ToString().Replace("\r\n", "\r\n<br>").Replace("  ", " &nbsp;")}", true, log);
             }
         }
 
         [FunctionName("RunCheck")]
-        public async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        public static async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation($"Run Check Web function executed at: {DateTime.Now}");
+            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.Now);
             try
             {
                 await SendAlerts(log);
@@ -51,9 +51,9 @@ namespace eBayNotifier
         }
 
         [FunctionName("GetCurrent")]
-        public async Task<IActionResult> GetCurrentListingDetails([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        public static async Task<IActionResult> GetCurrentListingDetails([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation($"Get Current Web function executed at: {DateTime.Now}");
+            log.LogInformation("Get Current Web function executed at: {Date}", DateTime.Now);
             try
             {
                 var listings = await GetListings(log);
@@ -69,64 +69,67 @@ namespace eBayNotifier
         private static async Task<List<EbayListing>> GetListings(ILogger log)
         {
             var items = new List<EbayListing>();
-            using (var client = new HttpClient())
+            using var client = new HttpClient();
+
+            var checkUser = Environment.GetEnvironmentVariable("CHECK_USER");
+
+            var url = $"https://www.ebay.co.uk/dsc/i.html?_ssn={checkUser}&_sop=1&_rss=1&_ipg=500";
+            log.LogInformation("Getting ebay listings from {url}", url);
+            var content = await client.GetStringAsync(url);
+            var rssFeed = XDocument.Parse(content);
+
+            rssFeed.Descendants().Attributes().Where(x => x.IsNamespaceDeclaration).Remove();
+
+            foreach (var elem in rssFeed.Descendants())
             {
-                var content = await client.GetStringAsync("https://www.ebay.co.uk/dsc/i.html?_ssn=blyth_meister&_sop=1&_rss=1&_ipg=500");
-                var rssFeed = XDocument.Parse(content);
+                elem.Name = elem.Name.LocalName;
+            }
 
-                rssFeed.Descendants().Attributes().Where(x => x.IsNamespaceDeclaration).Remove();
+            foreach (var item in rssFeed.XPathSelectElements("//item"))
+            {
+                var title = item.Element("title")?.Value ?? string.Empty;
+                var link = item.Element("link")?.Value ?? string.Empty;
+                var description = item.Element("description")?.Value ?? string.Empty;
+                var javaEndTime = item.Element("EndTime")?.Value ?? string.Empty;
+                var currentPriceText = item.Element("CurrentPrice")?.Value ?? string.Empty;
+                var bidCountText = item.Element("BidCount")?.Value ?? string.Empty;
 
-                foreach (var elem in rssFeed.Descendants())
+                if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(javaEndTime))
                 {
-                    elem.Name = elem.Name.LocalName;
-                }
+                    var itemNumberString = link.Substring(0, link.IndexOf('?', StringComparison.InvariantCultureIgnoreCase));
+                    itemNumberString = itemNumberString.Substring(itemNumberString.LastIndexOf('/') + 1);
 
-                foreach (var item in rssFeed.XPathSelectElements("//item"))
-                {
-                    var title = item.Element("title")?.Value ?? string.Empty;
-                    var link = item.Element("link")?.Value ?? string.Empty;
-                    var description = item.Element("description")?.Value ?? string.Empty;
-                    var javaEndTime = item.Element("EndTime")?.Value ?? string.Empty;
-                    var currentPriceText = item.Element("CurrentPrice")?.Value ?? string.Empty;
-                    var bidCountText = item.Element("bidCount")?.Value ?? string.Empty;
-
-                    if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(javaEndTime))
+                    if (!long.TryParse(itemNumberString, out var itemNumber))
                     {
-                        var itemNumberString = link.Substring(0, link.IndexOf('?', StringComparison.InvariantCultureIgnoreCase));
-                        itemNumberString = itemNumberString.Substring(itemNumberString.LastIndexOf('/') + 1);
-
-                        if (!long.TryParse(itemNumberString, out var itemNumber))
-                        {
-                            continue;
-                        }
-
-                        if (!long.TryParse(javaEndTime, out var javaTimestamp))
-                        {
-                            continue;
-                        }
-
-                        if (!double.TryParse(currentPriceText, out var currentPrice))
-                        {
-                            continue;
-                        }
-
-                        if (!int.TryParse(bidCountText, out var bidCount))
-                        {
-                            continue;
-                        }
-
-                        var endDate = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                        endDate = endDate.AddMilliseconds(javaTimestamp).ToLocalTime();
-
-                        items.Add(new EbayListing(itemNumber, link, title, description, endDate, bidCount, (currentPrice / 100)));
+                        continue;
                     }
+
+                    if (!long.TryParse(javaEndTime, out var javaTimestamp))
+                    {
+                        continue;
+                    }
+
+                    if (!double.TryParse(currentPriceText, out var currentPrice))
+                    {
+                        continue;
+                    }
+
+                    if (!int.TryParse(bidCountText, out var bidCount))
+                    {
+                        continue;
+                    }
+
+                    var endDate = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
+                    endDate = endDate.AddMilliseconds(javaTimestamp).ToLocalTime();
+
+                    items.Add(new EbayListing(itemNumber, link, title, description, endDate, bidCount, (currentPrice / 100)));
                 }
             }
 
             return items;
         }
 
-        private async Task SendAlerts(ILogger log)
+        private static async Task SendAlerts(ILogger log)
         {
             var listings = await GetListings(log);
 
@@ -169,6 +172,7 @@ namespace eBayNotifier
                 await Blobs.WriteAppDataBlob(newListingAlerts, "newAlert.dat", log);
                 await Blobs.WriteAppDataBlob(endingSoonAlerts, "endingSoonAlert.dat", log);
                 await Blobs.WriteAppDataBlob(titleChangeAlerts, "titleChangeAlert.dat", log);
+                await Blobs.WriteAppDataBlob(bidAlerts, "bidAlert.dat", log);
             }
         }
 

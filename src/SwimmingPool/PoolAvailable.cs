@@ -18,9 +18,9 @@ namespace SwimmingPool
     public class PoolAvailable
     {
         [FunctionName("PoolAvailableTimer")]
-        public async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
         {
-            log.LogInformation($"Pool Available Timer function executed at: {DateTime.Now}");
+            log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.Now);
             try
             {
                 await NotifyAvailableDates(log);
@@ -28,14 +28,14 @@ namespace SwimmingPool
             catch (Exception e)
             {
                 log.LogError(e, "Error in check/email");
-                await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}\r\n\r\nhttps://swimmingpool.blyth.me.uk/api/AllPoolAvailable\r\nhttps://swimmingpool.blyth.me.uk/api/GoodPoolAvailable\r\nhttps://swimmingpool.blyth.me.uk/api/RunCheck", true, log);
+                await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}", $"Error running pool check<br>{e.ToString().Replace("\r\n", "\r\n<br>").Replace("  ", " &nbsp;")}", true, log);
             }
         }
 
         [FunctionName("RunCheck")]
-        public async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        public static async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation($"Run Check Web function executed at: {DateTime.Now}");
+            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.Now);
             try
             {
                 await NotifyAvailableDates(log);
@@ -49,9 +49,9 @@ namespace SwimmingPool
         }
 
         [FunctionName("AllPoolAvailable")]
-        public async Task<IActionResult> GetAllPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        public static async Task<IActionResult> GetAllPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation($"Pool All Available Web function executed at: {DateTime.Now}");
+            log.LogInformation("Pool All Available Web function executed at: {Date}", DateTime.Now);
             try
             {
                 var result = await GetPoolAvailableDateTimes(log);
@@ -65,9 +65,9 @@ namespace SwimmingPool
         }
 
         [FunctionName("GoodPoolAvailable")]
-        public async Task<IActionResult> GetGoodPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        public static async Task<IActionResult> GetGoodPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation($"Pool Good Available Web function executed at: {DateTime.Now}");
+            log.LogInformation("Pool Good Available Web function executed at: {Date}", DateTime.Now);
             try
             {
                 var result = (await GetGoodDates(log)).ToList();
@@ -104,7 +104,7 @@ namespace SwimmingPool
                     message.AppendLine($" - {goodDate:f}");
                 }
 
-                message.AppendLine("Click to book: https://www.poolpartyhailsham.co.uk/bookings/");
+                message.AppendLine($"Click to book: {Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS")}");
 
                 await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), false, log);
                 await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), true, log);
@@ -122,7 +122,7 @@ namespace SwimmingPool
             foreach (var date in dates)
             {
                 var goodDate = false;
-                log.LogInformation($"Checking {date:f}");
+                log.LogInformation("Checking {date:f}", date);
                 if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
                 {
                     if (date.TimeOfDay >= TimeSpan.Parse("10:00") && date.TimeOfDay <= TimeSpan.Parse("14:30"))
@@ -133,12 +133,12 @@ namespace SwimmingPool
 
                 if (goodDate)
                 {
-                    log.LogInformation($"Good Date :) - {date:f}");
+                    log.LogInformation("Good Date :) - {date:f}", date);
                     goodDates.Add(date);
                 }
                 else
                 {
-                    log.LogInformation($"Bad Date :( - {date:f}");
+                    log.LogInformation("Bad Date :( - {date:f}", date);
                 }
             }
 
@@ -158,15 +158,15 @@ namespace SwimmingPool
                 new("firstYear","\"false\""),
             });
 
-            client.DefaultRequestHeaders.Add("Origin", "https://www.poolpartyhailsham.co.uk");
+            client.DefaultRequestHeaders.Add("Origin", Environment.GetEnvironmentVariable("POOL_URL_BASE"));
             client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
             client.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "cors");
             client.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "empty");
-            client.DefaultRequestHeaders.Add("Referer", "https://www.poolpartyhailsham.co.uk/bookings/");
+            client.DefaultRequestHeaders.Add("Referer", Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS"));
 
             log.LogInformation("Calling for available");
-            var result = await client.PostAsync("https://www.poolpartyhailsham.co.uk/wp-admin/admin-ajax.php", content);
-            log.LogInformation($"Got result status {result.StatusCode}");
+            var result = await client.PostAsync(Environment.GetEnvironmentVariable("POOL_URL_POST"), content);
+            log.LogInformation("Got result status {Status}", result.StatusCode);
             if (result.IsSuccessStatusCode)
             {
                 var resultContent = await result.Content.ReadAsStringAsync();

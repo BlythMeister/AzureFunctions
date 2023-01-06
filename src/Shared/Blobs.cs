@@ -1,4 +1,5 @@
 ﻿using Azure.Storage.Blobs;
+using Azure.Storage.Blobs.Models;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using System.Text;
@@ -10,16 +11,16 @@ namespace Shared
         public static async Task<T> ReadAppDataBlob<T>(string file, ILogger log)
             where T : new()
         {
-            var containerClient = new BlobContainerClient(Environment.GetEnvironmentVariable("AzureWebJobsStorage"), "app-data");
-            var blobClient = containerClient.GetBlobClient(file);
+            var blobClient = await GetClient(file);
 
             if (!await blobClient.ExistsAsync())
             {
-                log.LogInformation($"File {file} doesn't exist");
+                log.LogInformation("File {file} doesn't exist", file);
+                await WriteAppDataBlob(new T(), file, log);
                 return new T();
             }
 
-            log.LogInformation($"Loading file {file}");
+            log.LogInformation("Loading file {file}", file);
             try
             {
                 await using var readStream = await blobClient.OpenReadAsync();
@@ -29,21 +30,30 @@ namespace Shared
             }
             catch (Exception e)
             {
-                log.LogError(e, $"Error loading {file}");
+                log.LogError(e, "Error loading {file}", file);
                 return new T();
             }
         }
 
         public static async Task WriteAppDataBlob<T>(T saveObject, string file, ILogger log)
         {
-            var containerClient = new BlobContainerClient(Environment.GetEnvironmentVariable("AzureWebJobsStorage"), "app-data");
-            var blobClient = containerClient.GetBlobClient(file);
+            var blobClient = await GetClient(file);
 
-            log.LogInformation($"Writing file {file}");
+            log.LogInformation("Writing file {file}", file);
             await using var writeStream = await blobClient.OpenWriteAsync(true);
             var json = JsonConvert.SerializeObject(saveObject, Formatting.Indented);
             var byteArray = Encoding.UTF8.GetBytes(json);
             writeStream.Write(byteArray);
+        }
+
+        private static async Task<BlobClient> GetClient(string file)
+        {
+            var containerClient = new BlobContainerClient(Environment.GetEnvironmentVariable("AzureWebJobsStorage"), "app-data");
+            await containerClient.CreateIfNotExistsAsync(PublicAccessType.BlobContainer);
+
+            var blobClient = containerClient.GetBlobClient(file);
+
+            return blobClient;
         }
     }
 }
