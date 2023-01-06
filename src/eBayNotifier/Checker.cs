@@ -262,23 +262,23 @@ namespace eBayNotifier
 
             foreach (var listing in finished)
             {
-                if (titleChangeAlerts.ContainsKey(listing))
+                if (titleChangeAlerts.ContainsKey(listing) && bidAlerts.ContainsKey(listing))
                 {
                     var lastKnownTitle = titleChangeAlerts[listing];
-
+                    var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
+                    
                     var emailSubject = $"eBay Listing Ended - {lastKnownTitle}";
                     string emailHtml, emailText;
 
-                    if (bidAlerts.ContainsKey(listing))
+                    if (lastKnownBid > 0)
                     {
-                        var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
                         emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: {lastKnownPrice:N}</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
                         emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: {lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
                     }
                     else
                     {
-                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: 0</p><p>Last Known Selling Price: N/A</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
-                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: 0\r\nLast Known Selling Price: N/A\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>No bids seen before ending.  Possible unsold, accecpted offer or listing cancellation</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\nNo bids seen before ending.  Possible unsold, accepted offer or listing cancellation\r\n\r\nLink: https://www.ebay.co.uk/itm/{listing}";
                     }
 
                     await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
