@@ -159,7 +159,7 @@ namespace eBayNotifier
                 }
             }
 
-            if (RemoveFinishedListingsFromAlerts(listings, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
+            if (await NotifyFinished(log, listings, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
             {
                 blobsChanged = true;
             }
@@ -256,57 +256,58 @@ namespace eBayNotifier
             return false;
         }
 
-        private static bool RemoveFinishedListingsFromAlerts(List<EbayListing> listings, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
+        private static async Task<bool> NotifyFinished(ILogger log, List<EbayListing> listings, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
         {
-            var removedItems = false;
+            var finished = newListingAlerts.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList();
 
-            if (RemoveFinishedListingFromAlerts(listings, newListingAlerts))
+            foreach (var listing in finished)
             {
-                removedItems = true;
+                if (titleChangeAlerts.ContainsKey(listing))
+                {
+                    var lastKnownTitle = titleChangeAlerts[listing];
+
+                    var emailSubject = $"eBay Listing Ended - {lastKnownTitle}";
+                    string emailHtml, emailText;
+
+                    if (bidAlerts.ContainsKey(listing))
+                    {
+                        var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
+                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: {lastKnownPrice:N}</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: {lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                    }
+                    else
+                    {
+                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: 0</p><p>Last Known Selling Price: N/A</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: 0\r\nLast Known Selling Price: N/A\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                    }
+
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                }
+
+                TryRemove(newListingAlerts, listing);
+                TryRemove(endingSoonAlerts, listing);
+                TryRemove(titleChangeAlerts, listing);
+                TryRemove(bidAlerts, listing);
             }
 
-            if (RemoveFinishedListingFromAlerts(listings, endingSoonAlerts))
-            {
-                removedItems = true;
-            }
-
-            if (RemoveFinishedListingFromAlerts(listings, titleChangeAlerts))
-            {
-                removedItems = true;
-            }
-
-            if (RemoveFinishedListingFromAlerts(listings, bidAlerts))
-            {
-                removedItems = true;
-            }
-
-            return removedItems;
+            return finished.Any();
         }
 
-        private static bool RemoveFinishedListingFromAlerts(List<EbayListing> listings, List<long> alerts)
+        private static void TryRemove(List<long> items, long item)
         {
-            var removedItems = false;
-
-            foreach (var key in alerts.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList())
+            if (items.Contains(item))
             {
-                alerts.Remove(key);
-                removedItems = true;
+                items.Remove(item);
             }
-
-            return removedItems;
         }
 
-        private static bool RemoveFinishedListingFromAlerts<T>(List<EbayListing> listings, Dictionary<long, T> alerts)
+        private static void TryRemove<T>(Dictionary<long, T> items, long item)
         {
-            var removedItems = false;
-
-            foreach (var key in alerts.Keys.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList())
+            if (items.ContainsKey(item))
             {
-                alerts.Remove(key);
-                removedItems = true;
+                items.Remove(item);
             }
-
-            return removedItems;
         }
     }
 }
