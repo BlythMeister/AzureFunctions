@@ -195,7 +195,7 @@ namespace eBayNotifier
 
         private static async Task<bool> NotifyEndingSoon(ILogger log, List<long> alerts, EbayListing ebayListing)
         {
-            if (ebayListing.EndTime < DateTime.Now.AddDays(-1) && !alerts.Contains(ebayListing.ListingNumber))
+            if (ebayListing.EndTime < DateTime.Now.AddDays(1) && !alerts.Contains(ebayListing.ListingNumber))
             {
                 var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
                 var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
@@ -266,7 +266,7 @@ namespace eBayNotifier
                 {
                     var lastKnownTitle = titleChangeAlerts[listing];
                     var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
-                    
+
                     var emailSubject = $"eBay Listing Ended - {lastKnownTitle}";
                     string emailHtml, emailText;
 
