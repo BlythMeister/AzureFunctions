@@ -30,7 +30,7 @@ namespace eBayNotifier
             catch (Exception e)
             {
                 log.LogError(e, "Error in check/email");
-                await Emails.SendEmail("EBAY NOTIFIER ERROR", $"Error running eBay Notifier\r\n{e}", $"Error running eBay Notifier<br>{e.ToString().Replace("\r\n", "\r\n<br>").Replace("  ", " &nbsp;")}", true, log);
+                await Emails.SendErrorEmail("EBAY NOTIFIER ERROR", $"Error running eBay Notifier\r\n{e}", log);
             }
         }
 
@@ -184,8 +184,7 @@ namespace eBayNotifier
                 var emailHtml = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
                 var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
 
                 alerts.Add(ebayListing.ListingNumber);
                 return true;
@@ -202,8 +201,7 @@ namespace eBayNotifier
                 var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
                 var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
 
                 alerts.Add(ebayListing.ListingNumber);
                 return true;
@@ -226,8 +224,7 @@ namespace eBayNotifier
                 var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>Title: {ebayListing.Title}</h2><p>Old Title: {alerts[ebayListing.ListingNumber]}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
                 var emailText = $"eBay Listing Title Update\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nOld Title: {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
 
                 alerts[ebayListing.ListingNumber] = ebayListing.Title;
                 return true;
@@ -250,8 +247,7 @@ namespace eBayNotifier
                 var emailHtml = $"<h1>eBay Listing New Bid<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
                 var emailText = $"eBay Listing New Bid\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
 
                 alerts[ebayListing.ListingNumber] = (ebayListing.BidCount, ebayListing.CurrentPrice);
                 return true;
@@ -285,8 +281,7 @@ namespace eBayNotifier
                         emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: 0\r\nLast Known Selling Price: N/A\r\nLink: https://www.ebay.co.uk/itm/{listing}";
                     }
 
-                    await Emails.SendEmail(emailSubject, emailText, emailHtml, false, log);
-                    await Emails.SendEmail(emailSubject, emailText, emailHtml, true, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                 }
 
                 TryRemove(newListingAlerts, listing);

@@ -28,7 +28,7 @@ namespace SwimmingPool
             catch (Exception e)
             {
                 log.LogError(e, "Error in check/email");
-                await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}", $"Error running pool check<br>{e.ToString().Replace("\r\n", "\r\n<br>").Replace("  ", " &nbsp;")}", true, log);
+                await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}", log);
             }
         }
 
@@ -106,8 +106,7 @@ namespace SwimmingPool
 
                 message.AppendLine($"Click to book: {Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS")}");
 
-                await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), false, log);
-                await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), true, log);
+                await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), log);
 
                 sentDates.AddRange(result);
                 await Blobs.WriteAppDataBlob(sentDates, "data.dat", log);
