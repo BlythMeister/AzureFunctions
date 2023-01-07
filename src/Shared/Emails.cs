@@ -30,6 +30,10 @@ public static class Emails
 
     public static async Task SendEmail(string subject, string message, string? messageHtml, ILogger log)
     {
+        if (!bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_CC_ME"), out var ccMe))
+        {
+            ccMe = false;
+        }
         var emailFromAddress = Environment.GetEnvironmentVariable("NOTIFY_FROM_ADDRESS");
         var emailFromName = Environment.GetEnvironmentVariable("NOTIFY_FROM_NAME");
         var emailToAddress = Environment.GetEnvironmentVariable("NOTIFY_TO_ADDRESS");
@@ -46,7 +50,12 @@ public static class Emails
         var toMe = new EmailAddress(emailToAddressMe, emailToNameMe);
         var msg = MailHelper.CreateSingleEmail(from, to, subject, message, messageHtml);
         msg.AddCategory("AzureFunctions");
-        msg.AddCc(toMe);
+
+        if (ccMe)
+        {
+            msg.AddCc(toMe);
+        }
+
         await client.SendEmailAsync(msg);
     }
 }

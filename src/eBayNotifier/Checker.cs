@@ -180,11 +180,14 @@ namespace eBayNotifier
         {
             if (!alerts.Contains(ebayListing.ListingNumber))
             {
-                var emailSubject = $"New eBay Listing - {ebayListing.Title}";
-                var emailHtml = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_NEW_LISTING"), out var notify) && notify)
+                {
+                    var emailSubject = $"New eBay Listing - {ebayListing.Title}";
+                    var emailHtml = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                    var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                }
 
                 alerts.Add(ebayListing.ListingNumber);
                 return true;
@@ -197,11 +200,14 @@ namespace eBayNotifier
         {
             if (ebayListing.EndTime < DateTime.Now.AddDays(1) && !alerts.Contains(ebayListing.ListingNumber))
             {
-                var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
-                var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_ENDING_SOON"), out var notify) && notify)
+                {
+                    var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
+                    var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                    var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                }
 
                 alerts.Add(ebayListing.ListingNumber);
                 return true;
@@ -220,11 +226,14 @@ namespace eBayNotifier
 
             if (!alerts[ebayListing.ListingNumber].Equals(ebayListing.Title))
             {
-                var emailSubject = $"eBay Listing Title Update - {ebayListing.Title}";
-                var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>Title: {ebayListing.Title}</h2><p>Old Title: {alerts[ebayListing.ListingNumber]}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                var emailText = $"eBay Listing Title Update\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nOld Title: {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_TITLE_CHANGE"), out var notify) && notify)
+                {
+                    var emailSubject = $"eBay Listing Title Update - {ebayListing.Title}";
+                    var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>Title: {ebayListing.Title}</h2><p>Old Title: {alerts[ebayListing.ListingNumber]}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                    var emailText = $"eBay Listing Title Update\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nOld Title: {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                }
 
                 alerts[ebayListing.ListingNumber] = ebayListing.Title;
                 return true;
@@ -243,11 +252,14 @@ namespace eBayNotifier
 
             if (!alerts[ebayListing.ListingNumber].BidCount.Equals(ebayListing.BidCount))
             {
-                var emailSubject = $"eBay Listing New Bid - {ebayListing.Title}";
-                var emailHtml = $"<h1>eBay Listing New Bid<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                var emailText = $"eBay Listing New Bid\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_BID"), out var notify) && notify)
+                {
+                    var emailSubject = $"eBay Listing New Bid - {ebayListing.Title}";
+                    var emailHtml = $"<h1>eBay Listing New Bid<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
+                    var emailText = $"eBay Listing New Bid\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
-                await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                }
 
                 alerts[ebayListing.ListingNumber] = (ebayListing.BidCount, ebayListing.CurrentPrice);
                 return true;
@@ -262,26 +274,29 @@ namespace eBayNotifier
 
             foreach (var listing in finished)
             {
-                if (titleChangeAlerts.ContainsKey(listing) && bidAlerts.ContainsKey(listing))
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_ENDED"), out var notify) && notify)
                 {
-                    var lastKnownTitle = titleChangeAlerts[listing];
-                    var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
-
-                    var emailSubject = $"eBay Listing Ended - {lastKnownTitle}";
-                    string emailHtml, emailText;
-
-                    if (lastKnownBid > 0)
+                    if (titleChangeAlerts.ContainsKey(listing) && bidAlerts.ContainsKey(listing))
                     {
-                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: {lastKnownPrice:N}</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
-                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: {lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
-                    }
-                    else
-                    {
-                        emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>No bids seen before ending.  Possible unsold, accecpted offer or listing cancellation</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
-                        emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\nNo bids seen before ending.  Possible unsold, accepted offer or listing cancellation\r\n\r\nLink: https://www.ebay.co.uk/itm/{listing}";
-                    }
+                        var lastKnownTitle = titleChangeAlerts[listing];
+                        var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
 
-                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                        var emailSubject = $"eBay Listing Ended - {lastKnownTitle}";
+                        string emailHtml, emailText;
+
+                        if (lastKnownBid > 0)
+                        {
+                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: {lastKnownPrice:N}</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                            emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: {lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                        }
+                        else
+                        {
+                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>No bids seen before ending.  Possible unsold, accecpted offer or listing cancellation</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                            emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\nNo bids seen before ending.  Possible unsold, accepted offer or listing cancellation\r\n\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                        }
+
+                        await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    }
                 }
 
                 TryRemove(newListingAlerts, listing);
