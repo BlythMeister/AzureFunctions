@@ -11,13 +11,32 @@ namespace Shared
         public static async Task<T> ReadAppDataBlob<T>(string file, ILogger log)
             where T : new()
         {
+            try
+            {
+                var blobContent = await ReadAppDataBlobRaw(file, log);
+                return JsonConvert.DeserializeObject<T>(blobContent) ?? new T();
+            }
+            catch (FileNotFoundException e)
+            {
+                log.LogInformation("File {file} doesn't exist", file);
+                await WriteAppDataBlob(new T(), file, log);
+                return new T();
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "Error loading {file}", file);
+                return new T();
+            }
+        }
+
+        public static async Task<string> ReadAppDataBlobRaw(string file, ILogger log)
+        {
             var blobClient = await GetClient(file);
 
             if (!await blobClient.ExistsAsync())
             {
                 log.LogInformation("File {file} doesn't exist", file);
-                await WriteAppDataBlob(new T(), file, log);
-                return new T();
+                throw new FileNotFoundException(file);
             }
 
             log.LogInformation("Loading file {file}", file);
@@ -26,12 +45,12 @@ namespace Shared
                 await using var readStream = await blobClient.OpenReadAsync();
                 using var reader = new StreamReader(readStream);
                 var blobContent = await reader.ReadToEndAsync();
-                return JsonConvert.DeserializeObject<T>(blobContent) ?? new T();
+                return blobContent;
             }
             catch (Exception e)
             {
                 log.LogError(e, "Error loading {file}", file);
-                return new T();
+                throw;
             }
         }
 

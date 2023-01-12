@@ -66,6 +66,24 @@ namespace eBayNotifier
             }
         }
 
+        [FunctionName("GetFile")]
+        public static async Task<IActionResult> GetFile([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
+        {
+            log.LogInformation("Get File Web function executed at: {Date}", DateTime.UtcNow);
+            try
+            {
+                var name = $"{req.Query["name"]}.dat";
+                log.LogInformation("Loading file: {file}", name);
+                var content = await Blobs.ReadAppDataBlobRaw(name, log);
+                return new OkObjectResult(content);
+            }
+            catch (Exception e)
+            {
+                log.LogError(e, "Error running check");
+                return new ExceptionResult(e, true);
+            }
+        }
+
         private static async Task<List<EbayListing>> GetListings(ILogger log)
         {
             var items = new List<EbayListing>();
