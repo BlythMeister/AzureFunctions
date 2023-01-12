@@ -6,21 +6,18 @@ namespace Shared;
 
 public static class Emails
 {
+    public record SendData(DateTime SentTime, string Destination, string Subject);
+
+    private enum DestinationType
+    {
+        ToMe,
+        ToPerson,
+        ToPersonCcMe
+    }
+
     public static async Task SendErrorEmail(string subject, string message, ILogger log)
     {
-        var emailFromAddress = Environment.GetEnvironmentVariable("NOTIFY_FROM_ADDRESS");
-        var emailFromName = Environment.GetEnvironmentVariable("NOTIFY_FROM_NAME");
-        var emailToAddressMe = Environment.GetEnvironmentVariable("NOTIFY_ME_TO_ADDRESS");
-        var emailToNameMe = Environment.GetEnvironmentVariable("NOTIFY_ME_TO_NAME");
-        var apiKey = Environment.GetEnvironmentVariable("SENDGRID_KEY");
-
-        log.LogInformation("Sending email to {emailToAddress} from {emailFromAddress} subject {subject}", emailToAddressMe, emailFromAddress, subject);
-
-        var client = new SendGridClient(apiKey);
-        var from = new EmailAddress(emailFromAddress, emailFromName);
-        var to = new EmailAddress(emailToAddressMe, emailToNameMe);
-        var msg = MailHelper.CreateSingleEmail(from, to, subject, message, null);
-        await client.SendEmailAsync(msg);
+        await DoSend(subject, message, null, DestinationType.ToMe, log);
     }
 
     public static async Task SendEmail(string subject, string message, ILogger log)
@@ -34,27 +31,39 @@ public static class Emails
         {
             ccMe = false;
         }
+
+        await DoSend(subject, message, messageHtml, ccMe ? DestinationType.ToPersonCcMe : DestinationType.ToPerson, log);
+    }
+
+    private static async Task DoSend(string subject, string message, string? messageHtml, DestinationType destinationType, ILogger log)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("SENDGRID_KEY");
         var emailFromAddress = Environment.GetEnvironmentVariable("NOTIFY_FROM_ADDRESS");
         var emailFromName = Environment.GetEnvironmentVariable("NOTIFY_FROM_NAME");
         var emailToAddress = Environment.GetEnvironmentVariable("NOTIFY_TO_ADDRESS");
         var emailToName = Environment.GetEnvironmentVariable("NOTIFY_TO_NAME");
         var emailToAddressMe = Environment.GetEnvironmentVariable("NOTIFY_ME_TO_ADDRESS");
         var emailToNameMe = Environment.GetEnvironmentVariable("NOTIFY_ME_TO_NAME");
-        var apiKey = Environment.GetEnvironmentVariable("SENDGRID_KEY");
 
         log.LogInformation("Sending email to {emailToAddress} from {emailFromAddress} subject {subject}", emailToAddress, emailFromAddress, subject);
+        var sends = await Blobs.ReadAppDataBlob<List<SendData>>("emails.dat", log);
 
         var client = new SendGridClient(apiKey);
         var from = new EmailAddress(emailFromAddress, emailFromName);
         var to = new EmailAddress(emailToAddress, emailToName);
         var toMe = new EmailAddress(emailToAddressMe, emailToNameMe);
-        var msg = MailHelper.CreateSingleEmail(from, to, subject, message, messageHtml);
+        var toUse = destinationType == DestinationType.ToMe ? toMe : to;
+
+        var msg = MailHelper.CreateSingleEmail(from, toUse, subject, message, messageHtml);
+
         msg.AddCategory("AzureFunctions");
 
-        if (ccMe)
+        if (destinationType == DestinationType.ToPersonCcMe)
         {
             msg.AddCc(toMe);
         }
+
+        sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), subject));
 
         await client.SendEmailAsync(msg);
     }
