@@ -6,7 +6,7 @@ namespace Shared;
 
 public static class Emails
 {
-    public record SendData(DateTime SentTime, string Destination, string Subject);
+    public record SendData(DateTime SentTime, string Destination, bool Success, string Subject);
 
     private enum DestinationType
     {
@@ -63,8 +63,17 @@ public static class Emails
             msg.AddCc(toMe);
         }
 
-        sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), subject));
+        try
+        {
+            var response = await client.SendEmailAsync(msg);
+            sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), response.IsSuccessStatusCode, subject));
+        }
+        catch (Exception e)
+        {
+            log.LogError(e, "Error sending email");
+            sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), false, subject));
+        }
 
-        await client.SendEmailAsync(msg);
+        await Blobs.WriteAppDataBlob(sends, "emails.dat", log);
     }
 }
