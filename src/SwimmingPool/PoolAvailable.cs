@@ -20,7 +20,7 @@ namespace SwimmingPool
         [FunctionName("PoolAvailableTimer")]
         public static async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
         {
-            log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 await NotifyAvailableDates(log);
@@ -35,7 +35,7 @@ namespace SwimmingPool
         [FunctionName("RunCheck")]
         public static async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 await NotifyAvailableDates(log);
@@ -51,7 +51,7 @@ namespace SwimmingPool
         [FunctionName("AllPoolAvailable")]
         public static async Task<IActionResult> GetAllPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation("Pool All Available Web function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Pool All Available Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 var result = await GetPoolAvailableDateTimes(log);
@@ -67,7 +67,7 @@ namespace SwimmingPool
         [FunctionName("GoodPoolAvailable")]
         public static async Task<IActionResult> GetGoodPoolAvailable([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation("Pool Good Available Web function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Pool Good Available Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 var result = (await GetGoodDates(log)).ToList();
