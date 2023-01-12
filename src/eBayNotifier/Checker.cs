@@ -22,7 +22,7 @@ namespace eBayNotifier
         [FunctionName("eBayNotifierTimer")]
         public static async Task RunTimer([TimerTrigger("0 */10 * * * *")] TimerInfo myTimer, ILogger log)
         {
-            log.LogInformation("eBay Notifier Timer function executed at: {Date}", DateTime.Now);
+            log.LogInformation("eBay Notifier Timer function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 await SendAlerts(log);
@@ -37,7 +37,7 @@ namespace eBayNotifier
         [FunctionName("RunCheck")]
         public static async Task<IActionResult> RunCheck([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Run Check Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 await SendAlerts(log);
@@ -53,7 +53,7 @@ namespace eBayNotifier
         [FunctionName("GetCurrent")]
         public static async Task<IActionResult> GetCurrentListingDetails([HttpTrigger(AuthorizationLevel.Anonymous, "get", Route = null)] HttpRequest req, ILogger log)
         {
-            log.LogInformation("Get Current Web function executed at: {Date}", DateTime.Now);
+            log.LogInformation("Get Current Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
                 var listings = await GetListings(log);
@@ -72,10 +72,12 @@ namespace eBayNotifier
             using var client = new HttpClient();
 
             var checkUser = Environment.GetEnvironmentVariable("CHECK_USER");
+            var checkMax = Environment.GetEnvironmentVariable("CHECK_MAX");
 
-            var url = $"https://www.ebay.co.uk/dsc/i.html?_ssn={checkUser}&_sop=1&_rss=1&_ipg=500";
+            var url = $"https://www.ebay.co.uk/dsc/i.html?_ssn={checkUser}&_sop=1&_rss=1&_ipg={checkMax}";
             log.LogInformation("Getting ebay listings from {url}", url);
             var content = await client.GetStringAsync(url);
+            log.LogTrace("Response: {content}", content);
             var rssFeed = XDocument.Parse(content);
 
             rssFeed.Descendants().Attributes().Where(x => x.IsNamespaceDeclaration).Remove();
@@ -85,14 +87,18 @@ namespace eBayNotifier
                 elem.Name = elem.Name.LocalName;
             }
 
-            foreach (var item in rssFeed.XPathSelectElements("//item"))
+            var itemNodes = rssFeed.XPathSelectElements("//item");
+            log.LogInformation("There are {count} item nodes", itemNodes.Count());
+
+            foreach (var itemNode in itemNodes)
             {
-                var title = item.Element("title")?.Value ?? string.Empty;
-                var link = item.Element("link")?.Value ?? string.Empty;
-                var description = item.Element("description")?.Value ?? string.Empty;
-                var javaEndTime = item.Element("EndTime")?.Value ?? string.Empty;
-                var currentPriceText = item.Element("CurrentPrice")?.Value ?? string.Empty;
-                var bidCountText = item.Element("BidCount")?.Value ?? string.Empty;
+                log.LogTrace("Node: {node}", itemNode.ToString());
+                var title = itemNode.Element("title")?.Value ?? string.Empty;
+                var link = itemNode.Element("link")?.Value ?? string.Empty;
+                var description = itemNode.Element("description")?.Value ?? string.Empty;
+                var javaEndTime = itemNode.Element("EndTime")?.Value ?? string.Empty;
+                var currentPriceText = itemNode.Element("CurrentPrice")?.Value ?? string.Empty;
+                var bidCountText = itemNode.Element("BidCount")?.Value ?? string.Empty;
 
                 if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(javaEndTime))
                 {
@@ -101,26 +107,30 @@ namespace eBayNotifier
 
                     if (!long.TryParse(itemNumberString, out var itemNumber))
                     {
+                        log.LogWarning("Unable to parse '{data}' (itemNumber from url {link}) to long", itemNumberString, link);
                         continue;
                     }
 
                     if (!long.TryParse(javaEndTime, out var javaTimestamp))
                     {
+                        log.LogWarning("Unable to parse '{data}' (EndTime) to long", javaTimestamp);
                         continue;
                     }
 
                     if (!double.TryParse(currentPriceText, out var currentPrice))
                     {
+                        log.LogWarning("Unable to parse '{data}' (CurrentPrice) to double", currentPriceText);
                         continue;
                     }
 
                     if (!int.TryParse(bidCountText, out var bidCount))
                     {
+                        log.LogWarning("Unable to parse '{data}' (BidCount) to int", bidCountText);
                         continue;
                     }
 
                     var endDate = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                    endDate = endDate.AddMilliseconds(javaTimestamp).ToLocalTime();
+                    endDate = endDate.AddMilliseconds(javaTimestamp);
 
                     items.Add(new EbayListing(itemNumber, link, title, description, endDate, bidCount, (currentPrice / 100)));
                 }
@@ -138,9 +148,16 @@ namespace eBayNotifier
             var endingSoonAlerts = await Blobs.ReadAppDataBlob<List<long>>("endingSoonAlert.dat", log);
             var titleChangeAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, string>>("titleChangeAlert.dat", log);
             var bidAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, (int, double)>>("bidAlert.dat", log);
+            var expectedEndDates = await Blobs.ReadAppDataBlob<Dictionary<long, DateTime>>("expectedEndDates.dat", log);
 
             foreach (var ebayListing in listings)
             {
+                if (!expectedEndDates.ContainsKey(ebayListing.ListingNumber))
+                {
+                    expectedEndDates.Add(ebayListing.ListingNumber, ebayListing.EndTime);
+                    blobsChanged = true;
+                }
+
                 if (await NotifyNewListings(log, newListingAlerts, ebayListing))
                 {
                     blobsChanged = true;
@@ -162,7 +179,7 @@ namespace eBayNotifier
                 }
             }
 
-            if (await NotifyFinished(log, listings, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
+            if (await NotifyFinished(log, listings, expectedEndDates, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
             {
                 blobsChanged = true;
             }
@@ -173,6 +190,7 @@ namespace eBayNotifier
                 await Blobs.WriteAppDataBlob(endingSoonAlerts, "endingSoonAlert.dat", log);
                 await Blobs.WriteAppDataBlob(titleChangeAlerts, "titleChangeAlert.dat", log);
                 await Blobs.WriteAppDataBlob(bidAlerts, "bidAlert.dat", log);
+                await Blobs.WriteAppDataBlob(expectedEndDates, "expectedEndDates.dat", log);
             }
         }
 
@@ -198,7 +216,7 @@ namespace eBayNotifier
 
         private static async Task<bool> NotifyEndingSoon(ILogger log, List<long> alerts, EbayListing ebayListing)
         {
-            if (ebayListing.EndTime < DateTime.Now.AddDays(1) && !alerts.Contains(ebayListing.ListingNumber))
+            if (ebayListing.EndTime < DateTime.UtcNow.AddDays(1) && !alerts.Contains(ebayListing.ListingNumber))
             {
                 if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_ENDING_SOON"), out var notify) && notify)
                 {
@@ -268,9 +286,24 @@ namespace eBayNotifier
             return false;
         }
 
-        private static async Task<bool> NotifyFinished(ILogger log, List<EbayListing> listings, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
+        private static async Task<bool> NotifyFinished(ILogger log, List<EbayListing> listings, Dictionary<long, DateTime> expectedEndDates, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
         {
-            var finished = newListingAlerts.Where(x => !listings.Any(l => l.ListingNumber == x)).ToList();
+            var finished = new List<long>();
+
+            foreach (var (itemNumber, endDate) in expectedEndDates.Where(x => !listings.Any(l => l.ListingNumber == x.Key)))
+            {
+                if (!listings.Any())
+                {
+                    if (endDate <= DateTime.UtcNow)
+                    {
+                        finished.Add(itemNumber);
+                    }
+                }
+                else
+                {
+                    finished.Add(itemNumber);
+                }
+            }
 
             foreach (var listing in finished)
             {
@@ -303,6 +336,7 @@ namespace eBayNotifier
                 TryRemove(endingSoonAlerts, listing);
                 TryRemove(titleChangeAlerts, listing);
                 TryRemove(bidAlerts, listing);
+                TryRemove(expectedEndDates, listing);
             }
 
             return finished.Any();
