@@ -37,6 +37,12 @@ public static class Emails
 
     private static async Task DoSend(string subject, string message, string? messageHtml, DestinationType destinationType, ILogger log)
     {
+        if (!bool.Parse(Environment.GetEnvironmentVariable("NOTIFY_ENABLE") ?? "FALSE"))
+        {
+            log.LogWarning("Notifications Disabled");
+            return;
+        }
+
         var apiKey = Environment.GetEnvironmentVariable("SENDGRID_KEY");
         var emailFromAddress = Environment.GetEnvironmentVariable("NOTIFY_FROM_ADDRESS");
         var emailFromName = Environment.GetEnvironmentVariable("NOTIFY_FROM_NAME");

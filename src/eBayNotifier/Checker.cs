@@ -1,24 +1,25 @@
+using HtmlAgilityPack;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using ScrapySharp.Extensions;
+using ScrapySharp.Html;
+using ScrapySharp.Network;
 using Shared;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
+using System.Web;
 using System.Web.Http;
-using System.Xml.Linq;
-using System.Xml.XPath;
 
 namespace eBayNotifier
 {
     public class Checker
     {
-        public record EbayListing(long ListingNumber, string Link, string Title, string Description, DateTime EndTime, int BidCount, double CurrentPrice);
-
         [FunctionName("eBayNotifierTimer")]
         public static async Task RunTimer([TimerTrigger("0 */10 * * * *")] TimerInfo myTimer, ILogger log)
         {
@@ -87,70 +88,45 @@ namespace eBayNotifier
         private static async Task<List<EbayListing>> GetListings(ILogger log)
         {
             var items = new List<EbayListing>();
-            using var client = new HttpClient();
 
             var checkUser = Environment.GetEnvironmentVariable("CHECK_USER");
-            var checkMax = Environment.GetEnvironmentVariable("CHECK_MAX");
+            var checkMax = Environment.GetEnvironmentVariable("CHECK_MAX") ?? "50";
 
-            var url = $"https://www.ebay.co.uk/dsc/i.html?_ssn={checkUser}&_sop=1&_rss=1&_ipg={checkMax}";
+            var url = $"https://www.ebay.co.uk/sch/i.html?_sofindtype=0&_byseller=1&_fss=1&_fsradio=%26LH_SpecificSeller%3D1&_saslop=1&_sasl={checkUser}&_sop=1&_ipg={checkMax}&_dmd=1";
             log.LogInformation("Getting ebay listings from {url}", url);
-            var content = await client.GetStringAsync(url);
-            log.LogTrace("Response: {content}", content);
-            var rssFeed = XDocument.Parse(content);
 
-            rssFeed.Descendants().Attributes().Where(x => x.IsNamespaceDeclaration).Remove();
-
-            foreach (var elem in rssFeed.Descendants())
+            var browser = new ScrapingBrowser
             {
-                elem.Name = elem.Name.LocalName;
-            }
+                IgnoreCookies = true,
+                Encoding = Encoding.UTF8
+            };
+            var page = await browser.NavigateToPageAsync(new Uri(url));
 
-            var itemNodes = rssFeed.XPathSelectElements("//item");
-            log.LogInformation("There are {count} item nodes", itemNodes.Count());
-
-            foreach (var itemNode in itemNodes)
+            foreach (var itemNode in page.Find("div", By.Class("s-item__wrapper")))
             {
                 log.LogTrace("Node: {node}", itemNode.ToString());
-                var title = itemNode.Element("title")?.Value ?? string.Empty;
-                var link = itemNode.Element("link")?.Value ?? string.Empty;
-                var description = itemNode.Element("description")?.Value ?? string.Empty;
-                var javaEndTime = itemNode.Element("EndTime")?.Value ?? string.Empty;
-                var currentPriceText = itemNode.Element("CurrentPrice")?.Value ?? string.Empty;
-                var bidCountText = itemNode.Element("BidCount")?.Value ?? string.Empty;
 
-                if (!string.IsNullOrWhiteSpace(title) && !string.IsNullOrWhiteSpace(link) && !string.IsNullOrWhiteSpace(javaEndTime))
+                var itemLink = itemNode.CssSelect("div.s-item__image a").FirstOrDefault()?.Attributes["href"]?.Value;
+
+                var itemNumber = itemLink.Substring(0, itemLink.IndexOf('?'));
+                itemNumber = itemNumber.Substring(itemNumber.LastIndexOf('/') + 1);
+
+                if (string.IsNullOrWhiteSpace(itemNumber) || itemNumber == "123456")
                 {
-                    var itemNumberString = link.Substring(0, link.IndexOf('?', StringComparison.InvariantCultureIgnoreCase));
-                    itemNumberString = itemNumberString.Substring(itemNumberString.LastIndexOf('/') + 1);
+                    continue;
+                }
 
-                    if (!long.TryParse(itemNumberString, out var itemNumber))
-                    {
-                        log.LogWarning("Unable to parse '{data}' (itemNumber from url {link}) to long", itemNumberString, link);
-                        continue;
-                    }
+                var imageLink = itemNode.CssSelect("div.s-item__image-wrapper img.s-item__image-img").FirstOrDefault()?.Attributes["src"]?.Value;
+                var title = ((HtmlTextNode)itemNode.CssSelect("div.s-item__title span").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
+                var price = ((HtmlTextNode)itemNode.CssSelect("div.s-item__detail span.s-item__price").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
+                var bids = ((HtmlTextNode)itemNode.CssSelect("div.s-item__detail span.s-item__bids").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
+                var buyItNow = ((HtmlTextNode)itemNode.CssSelect("div.s-item__detail span.s-item__buyItNowOption").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
+                var purchaseOption = ((HtmlTextNode)itemNode.CssSelect("div.s-item__detail span.s-item__purchaseOptionsWithIcon").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
+                var timeLeft = ((HtmlTextNode)itemNode.CssSelect("div.s-item__detail span.s-item__time-left").FirstOrDefault()?.ChildNodes.FirstOrDefault(x => x.NodeType == HtmlNodeType.Text))?.Text;
 
-                    if (!long.TryParse(javaEndTime, out var javaTimestamp))
-                    {
-                        log.LogWarning("Unable to parse '{data}' (EndTime) to long", javaTimestamp);
-                        continue;
-                    }
-
-                    if (!double.TryParse(currentPriceText, out var currentPrice))
-                    {
-                        log.LogWarning("Unable to parse '{data}' (CurrentPrice) to double", currentPriceText);
-                        continue;
-                    }
-
-                    if (!int.TryParse(bidCountText, out var bidCount))
-                    {
-                        log.LogWarning("Unable to parse '{data}' (BidCount) to int", bidCountText);
-                        continue;
-                    }
-
-                    var endDate = new DateTime(1970, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc);
-                    endDate = endDate.AddMilliseconds(javaTimestamp);
-
-                    items.Add(new EbayListing(itemNumber, link, title, description, endDate, bidCount, (currentPrice / 100)));
+                if (title != null && price != null)
+                {
+                    items.Add(new EbayListing(itemNumber, imageLink, title, bids, buyItNow, purchaseOption, price, timeLeft));
                 }
             }
 
@@ -166,13 +142,27 @@ namespace eBayNotifier
             var endingSoonAlerts = await Blobs.ReadAppDataBlob<List<long>>("endingSoonAlert.dat", log);
             var titleChangeAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, string>>("titleChangeAlert.dat", log);
             var bidAlerts = await Blobs.ReadAppDataBlob<Dictionary<long, (int, double)>>("bidAlert.dat", log);
-            var expectedEndDates = await Blobs.ReadAppDataBlob<Dictionary<long, DateTime>>("expectedEndDates.dat", log);
+            var endWithin1Hour = await Blobs.ReadAppDataBlob<List<long>>("endsWithin1Hour.dat", log);
+            var endWithin24Hour = await Blobs.ReadAppDataBlob<List<long>>("endsWithin24Hour.dat", log);
+            var imageLinks = await Blobs.ReadAppDataBlob<Dictionary<long, string>>("imageLinks.dat", log);
 
             foreach (var ebayListing in listings)
             {
-                if (!expectedEndDates.ContainsKey(ebayListing.ListingNumber))
+                if (!endWithin1Hour.Contains(ebayListing.ListingNumber) && ebayListing.EndsWithin1Hour)
                 {
-                    expectedEndDates.Add(ebayListing.ListingNumber, ebayListing.EndTime);
+                    endWithin1Hour.Add(ebayListing.ListingNumber);
+                    blobsChanged = true;
+                }
+
+                if (!endWithin24Hour.Contains(ebayListing.ListingNumber) && ebayListing.EndsWithin24Hour)
+                {
+                    endWithin24Hour.Add(ebayListing.ListingNumber);
+                    blobsChanged = true;
+                }
+
+                if (!imageLinks.ContainsKey(ebayListing.ListingNumber) && !string.IsNullOrWhiteSpace(ebayListing.ImageLink))
+                {
+                    imageLinks.Add(ebayListing.ListingNumber, ebayListing.ImageLink);
                     blobsChanged = true;
                 }
 
@@ -197,7 +187,7 @@ namespace eBayNotifier
                 }
             }
 
-            if (await NotifyFinished(log, listings, expectedEndDates, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
+            if (await NotifyFinished(log, listings, endWithin1Hour, endWithin24Hour, imageLinks, newListingAlerts, endingSoonAlerts, titleChangeAlerts, bidAlerts))
             {
                 blobsChanged = true;
             }
@@ -208,7 +198,9 @@ namespace eBayNotifier
                 await Blobs.WriteAppDataBlob(endingSoonAlerts, "endingSoonAlert.dat", log);
                 await Blobs.WriteAppDataBlob(titleChangeAlerts, "titleChangeAlert.dat", log);
                 await Blobs.WriteAppDataBlob(bidAlerts, "bidAlert.dat", log);
-                await Blobs.WriteAppDataBlob(expectedEndDates, "expectedEndDates.dat", log);
+                await Blobs.WriteAppDataBlob(endWithin1Hour, "endsWithin1Hour.dat", log);
+                await Blobs.WriteAppDataBlob(endWithin24Hour, "endsWithin24Hour.dat", log);
+                await Blobs.WriteAppDataBlob(imageLinks, "imageLinks.dat", log);
             }
         }
 
@@ -219,8 +211,8 @@ namespace eBayNotifier
                 if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_NEW_LISTING"), out var notify) && notify)
                 {
                     var emailSubject = $"New eBay Listing - {ebayListing.Title}";
-                    var emailHtml = $"<h1>New eBay Listing<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"New eBay Listing\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nLink: {ebayListing.Link}";
+                    var emailHtml = $"<h1>New eBay Listing<h1><h2>{ebayListing.Title}</h2><table><tr><td><img src=\"{ebayListing.ImageLink}\"/></td><td><p>Time Left: {ebayListing.TimeLeft}</p><p>Buy It Now: {ebayListing.BuyItNow}</p><p>Price: £{ebayListing.CurrentPrice:N}</p><td><tr></table><p><a href=\"{ebayListing.Link}\">View Listing</a></p>";
+                    var emailText = $"New eBay Listing\r\n\r\n{ebayListing.Title}\r\n\r\nTime Left: {ebayListing.TimeLeft}\r\nBuy It Now: {ebayListing.BuyItNow}\r\nPrice: £{ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
                     await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                 }
@@ -234,13 +226,13 @@ namespace eBayNotifier
 
         private static async Task<bool> NotifyEndingSoon(ILogger log, List<long> alerts, EbayListing ebayListing)
         {
-            if (ebayListing.EndTime < DateTime.UtcNow.AddDays(1) && !alerts.Contains(ebayListing.ListingNumber))
+            if (ebayListing.EndsWithin24Hour && !alerts.Contains(ebayListing.ListingNumber))
             {
                 if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_ENDING_SOON"), out var notify) && notify)
                 {
                     var emailSubject = $"eBay Listing Ends Tomorrow - {ebayListing.Title}";
-                    var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"eBay Listing Ends Tomorrow\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+                    var emailHtml = $"<h1>eBay Listing Ends Tomorrow<h1><h2>{ebayListing.Title}</h2><table><tr><td><img src=\"{ebayListing.ImageLink}\"/></td><td><p>Time Left: {ebayListing.TimeLeft}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><td><tr></table><p><a href=\"{ebayListing.Link}\">View Listing</a></p>";
+                    var emailText = $"eBay Listing Ends Tomorrow\r\n\r\n{ebayListing.Title}\r\n\r\nTime Left: {ebayListing.TimeLeft}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
                     await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                 }
@@ -265,8 +257,8 @@ namespace eBayNotifier
                 if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_TITLE_CHANGE"), out var notify) && notify)
                 {
                     var emailSubject = $"eBay Listing Title Update - {ebayListing.Title}";
-                    var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>Title: {ebayListing.Title}</h2><p>Old Title: {alerts[ebayListing.ListingNumber]}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"eBay Listing Title Update\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nOld Title: {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
+                    var emailHtml = $"<h1>eBay Listing Title Update<h1><h2>{ebayListing.Title}</h2><table><tr><td><img src=\"{ebayListing.ImageLink}\"/></td><td><p>Old {alerts[ebayListing.ListingNumber]}</p><td><tr></table><p><a href=\"{ebayListing.Link}\">View Listing</a></p>";
+                    var emailText = $"eBay Listing Title Update\r\n\r\n{ebayListing.Title}\r\n\r\nOld {alerts[ebayListing.ListingNumber]}\r\nLink: {ebayListing.Link}";
 
                     await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                 }
@@ -290,9 +282,9 @@ namespace eBayNotifier
             {
                 if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_BID"), out var notify) && notify)
                 {
-                    var emailSubject = $"eBay Listing New Bid - {ebayListing.Title}";
-                    var emailHtml = $"<h1>eBay Listing New Bid<h1><h2>Title: {ebayListing.Title}</h2><p>Ends: {ebayListing.EndTime:f}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: {ebayListing.CurrentPrice:N}</p><p><a href=\"{ebayListing.Link}\">View Listing</a></p>{ebayListing.Description}";
-                    var emailText = $"eBay Listing New Bid\r\n\r\nTitle: {ebayListing.Title}\r\n\r\nEnds: {ebayListing.EndTime:f}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: {alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: {ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+                    var emailSubject = $"eBay Listing Bid - {ebayListing.Title}";
+                    var emailHtml = $"<h1>eBay Listing Bid<h1><h2>{ebayListing.Title}</h2><table><tr><td><img src=\"{ebayListing.ImageLink}\"/></td><td><p>Time Left: {ebayListing.TimeLeft}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: £{alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: £{ebayListing.CurrentPrice:N}</p><td><tr></table><p><a href=\"{ebayListing.Link}\">View Listing</a></p>";
+                    var emailText = $"eBay Listing Bid\r\n\r\n{ebayListing.Title}\r\n\r\nTime Left: {ebayListing.TimeLeft}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: £{alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: £{ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
 
                     await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                 }
@@ -304,15 +296,15 @@ namespace eBayNotifier
             return false;
         }
 
-        private static async Task<bool> NotifyFinished(ILogger log, List<EbayListing> listings, Dictionary<long, DateTime> expectedEndDates, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
+        private static async Task<bool> NotifyFinished(ILogger log, List<EbayListing> listings, List<long> endWithin1Hour, List<long> endWithin24Hour, Dictionary<long, string> imageLinks, List<long> newListingAlerts, List<long> endingSoonAlerts, Dictionary<long, string> titleChangeAlerts, Dictionary<long, (int, double)> bidAlerts)
         {
             var finished = new List<long>();
 
-            foreach (var (itemNumber, endDate) in expectedEndDates.Where(x => !listings.Any(l => l.ListingNumber == x.Key)))
+            foreach (var itemNumber in newListingAlerts.Where(x => !listings.Any(l => l.ListingNumber == x)))
             {
                 if (!listings.Any())
                 {
-                    if (endDate <= DateTime.UtcNow)
+                    if (endWithin1Hour.Contains(itemNumber) && endWithin24Hour.Contains(itemNumber))
                     {
                         finished.Add(itemNumber);
                     }
@@ -329,6 +321,7 @@ namespace eBayNotifier
                 {
                     if (titleChangeAlerts.ContainsKey(listing) && bidAlerts.ContainsKey(listing))
                     {
+                        var lastKnownImage = imageLinks[listing];
                         var lastKnownTitle = titleChangeAlerts[listing];
                         var (lastKnownBid, lastKnownPrice) = bidAlerts[listing];
 
@@ -337,24 +330,26 @@ namespace eBayNotifier
 
                         if (lastKnownBid > 0)
                         {
-                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: {lastKnownPrice:N}</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
-                            emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: {lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>{lastKnownTitle}</h2><table><tr><td><img src=\"{lastKnownImage}\"/></td><td><p>Last Known Bids: {lastKnownBid}</p><p>Last Known Selling Price: £{lastKnownPrice:N}</p><td><tr></table><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                            emailText = $"eBay Listing Ended\r\n\r\n{lastKnownTitle}\r\n\r\nLast Known Bids: {lastKnownBid}\r\nLast Known Selling Price: £{lastKnownPrice:N}\r\nLink: https://www.ebay.co.uk/itm/{listing}";
                         }
                         else
                         {
-                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>Title: {lastKnownTitle}</h2><p>No bids seen before ending.  Possible unsold, accecpted offer or listing cancellation</p><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
-                            emailText = $"eBay Listing Ended\r\n\r\nTitle: {lastKnownTitle}\r\nNo bids seen before ending.  Possible unsold, accepted offer or listing cancellation\r\n\r\nLink: https://www.ebay.co.uk/itm/{listing}";
+                            emailHtml = $"<h1>eBay Listing Ended<h1><h2>{lastKnownTitle}</h2><table><tr><td><img src=\"{lastKnownImage}\"/></td><td><p>No bids seen before ending.  Possible unsold, accepted offer or listing cancellation</p><td><tr></table><p><a href=\"https://www.ebay.co.uk/itm/{listing}\">View Listing</a></p>";
+                            emailText = $"eBay Listing Ended\r\n\r\n{lastKnownTitle}\r\nNo bids seen before ending.  Possible unsold, accepted offer or listing cancellation\r\n\r\nLink: https://www.ebay.co.uk/itm/{listing}";
                         }
 
                         await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
                     }
                 }
 
+                TryRemove(endWithin1Hour, listing);
+                TryRemove(endWithin24Hour, listing);
+                TryRemove(imageLinks, listing);
                 TryRemove(newListingAlerts, listing);
                 TryRemove(endingSoonAlerts, listing);
                 TryRemove(titleChangeAlerts, listing);
                 TryRemove(bidAlerts, listing);
-                TryRemove(expectedEndDates, listing);
             }
 
             return finished.Any();
@@ -373,6 +368,34 @@ namespace eBayNotifier
             if (items.ContainsKey(item))
             {
                 items.Remove(item);
+            }
+        }
+
+        public class EbayListing
+        {
+            public long ListingNumber { get; }
+            public string ImageLink { get; }
+            public string Link { get; }
+            public string Title { get; }
+            public bool EndsWithin24Hour { get; }
+            public bool EndsWithin1Hour { get; }
+            public string TimeLeft { get; }
+            public int BidCount { get; }
+            public double CurrentPrice { get; }
+            public bool BuyItNow { get; }
+
+            public EbayListing(string itemNumber, string imageLink, string title, string bids, string buyItNow, string purchaseOption, string price, string timeLeft)
+            {
+                ListingNumber = long.Parse(itemNumber);
+                ImageLink = imageLink;
+                Link = $"https://www.ebay.co.uk/itm/{itemNumber}";
+                Title = HttpUtility.HtmlDecode(title);
+                BidCount = string.IsNullOrWhiteSpace(bids) ? 0 : int.Parse(bids.Replace("bids", "").Replace("bid", "").Trim());
+                CurrentPrice = double.Parse(price.Replace("£", ""));
+                EndsWithin24Hour = !string.IsNullOrWhiteSpace(timeLeft) && !timeLeft.Split(' ')[0].EndsWith("d");
+                EndsWithin1Hour = EndsWithin24Hour && !string.IsNullOrWhiteSpace(timeLeft) && !timeLeft.Split(' ')[0].EndsWith("h");
+                TimeLeft = string.IsNullOrWhiteSpace(timeLeft) ? "No End Date" : timeLeft.Replace(" left", "");
+                BuyItNow = !string.IsNullOrWhiteSpace(buyItNow) || (!string.IsNullOrWhiteSpace(purchaseOption) && purchaseOption.Contains("Buy it now"));
             }
         }
     }
