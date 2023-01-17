@@ -163,6 +163,8 @@ namespace SwimmingPool
             client.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "empty");
             client.DefaultRequestHeaders.Add("Referer", Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS"));
 
+            var sessions = new List<DateTime>();
+
             log.LogInformation("Calling for available");
             var result = await client.PostAsync(Environment.GetEnvironmentVariable("POOL_URL_POST"), content);
             log.LogInformation("Got result status {Status}", result.StatusCode);
@@ -175,7 +177,6 @@ namespace SwimmingPool
                 }
 
                 var obj = JObject.Parse(resultContent);
-                var sessions = new List<DateTime>();
 
                 foreach (var dateItem in obj.Children().Select(x => x.ToObject<JProperty>()))
                 {
@@ -192,11 +193,14 @@ namespace SwimmingPool
                         }
                     }
                 }
-
-                return sessions;
             }
 
-            return null;
+            if (!sessions.Any())
+            {
+                await Emails.SendEmail("POOL CHECK WARNING", "Found no dates when checking", log);
+            }
+
+            return sessions;
         }
     }
 }
