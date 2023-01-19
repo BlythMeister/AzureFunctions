@@ -105,22 +105,32 @@ namespace eBayNotifier
             }
         }
 
-        private static async Task<WebPage> LoadPage(string url)
+        private static async Task<WebPage> LoadPage(string url, ILogger log)
         {
+            if (url.Contains("?"))
+            {
+                url += $"&nocache={Guid.NewGuid()}";
+            }
+            else
+            {
+                url += $"?nocache={Guid.NewGuid()}";
+            }
+
             var browser = new ScrapingBrowser
             {
                 IgnoreCookies = true,
                 Encoding = Encoding.UTF8,
-                CachePolicy = new RequestCachePolicy(RequestCacheLevel.NoCacheNoStore),
-                //AllowAutoRedirect = true,
-                //AutoDownloadPagesResources = true
+                CachePolicy = new RequestCachePolicy(RequestCacheLevel.BypassCache),
+                KeepAlive = false,
             };
+
+            log.LogInformation($"Browser navigate to {url}");
             return await browser.NavigateToPageAsync(new Uri(url));
         }
 
         private static async Task<EbayListing> GetListing(string itemNumber, ILogger log)
         {
-            var page = await LoadPage($"https://www.ebay.co.uk/itm/{itemNumber}");
+            var page = await LoadPage($"https://www.ebay.co.uk/itm/{itemNumber}", log);
 
             var imageLink = page.Find("meta", By.Name("twitter:image")).FirstOrDefault()?.Attributes["content"]?.Value; ;
             var title = page.Find("meta", By.Name("twitter:title")).FirstOrDefault()?.Attributes["content"]?.Value;
@@ -153,15 +163,15 @@ namespace eBayNotifier
         {
             var items = new List<EbayListing>();
 
-            checkMax = checkMax ?? "50";
+            checkMax ??= "100";
 
             var url = $"https://www.ebay.co.uk/sch/i.html?_sofindtype=0&_byseller=1&_fss=1&_fsradio=%26LH_SpecificSeller%3D1&_saslop=1&_sasl={checkUser}&_sop=1&_ipg={checkMax}&_dmd=1";
             log.LogInformation("Getting ebay listings from {url}", url);
-            var page = await LoadPage(url);
+            var page = await LoadPage(url, log);
 
             foreach (var itemNode in page.Find("div", By.Class("s-item__wrapper")))
             {
-                log.LogTrace("Node: {node}", itemNode.ToString());
+                log.LogDebug("Node: {node}", itemNode.ToString());
 
                 var itemLink = itemNode.CssSelect("div.s-item__image a").FirstOrDefault()?.Attributes["href"]?.Value;
 
@@ -314,17 +324,22 @@ namespace eBayNotifier
 
             if (!alerts[ebayListing.ListingNumber].BidCount.Equals(ebayListing.BidCount))
             {
-                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_BID"), out var notify) && notify)
+                var confirmedListing = await GetListing(ebayListing.ListingNumber.ToString(), log);
+
+                if (!alerts[confirmedListing.ListingNumber].BidCount.Equals(confirmedListing.BidCount))
                 {
-                    var emailSubject = $"eBay Listing Bid - {ebayListing.Title}";
-                    var emailHtml = $"<h1>eBay Listing Bid<h1><h2>{ebayListing.Title}</h2><table><tr><td><img src=\"{ebayListing.ImageLink}\"/></td><td><p>Time Left: {ebayListing.TimeLeft}</p><p>Old Bids: {alerts[ebayListing.ListingNumber].BidCount}</p><p>Old Price: £{alerts[ebayListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {ebayListing.BidCount}</p><p>Price: £{ebayListing.CurrentPrice:N}</p><td><tr></table><p><a href=\"{ebayListing.Link}\">View Listing</a></p>";
-                    var emailText = $"eBay Listing Bid\r\n\r\n{ebayListing.Title}\r\n\r\nTime Left: {ebayListing.TimeLeft}\r\nOld Bids: {alerts[ebayListing.ListingNumber].BidCount}\r\nOld Price: £{alerts[ebayListing.ListingNumber].CurrentPrice:N}\r\nBids: {ebayListing.BidCount}\r\nPrice: £{ebayListing.CurrentPrice:N}\r\nLink: {ebayListing.Link}";
+                    if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TYPE_BID"), out var notify) && notify)
+                    {
+                        var emailSubject = $"eBay Listing Bid - {confirmedListing.Title}";
+                        var emailHtml = $"<h1>eBay Listing Bid<h1><h2>{confirmedListing.Title}</h2><table><tr><td><img src=\"{confirmedListing.ImageLink}\"/></td><td><p>Time Left: {confirmedListing.TimeLeft}</p><p>Old Bids: {alerts[confirmedListing.ListingNumber].BidCount}</p><p>Old Price: £{alerts[confirmedListing.ListingNumber].CurrentPrice:N}</p><p>Bids: {confirmedListing.BidCount}</p><p>Price: £{confirmedListing.CurrentPrice:N}</p><td><tr></table><p><a href=\"{confirmedListing.Link}\">View Listing</a></p>";
+                        var emailText = $"eBay Listing Bid\r\n\r\n{confirmedListing.Title}\r\n\r\nTime Left: {confirmedListing.TimeLeft}\r\nOld Bids: {alerts[confirmedListing.ListingNumber].BidCount}\r\nOld Price: £{alerts[confirmedListing.ListingNumber].CurrentPrice:N}\r\nBids: {confirmedListing.BidCount}\r\nPrice: £{confirmedListing.CurrentPrice:N}\r\nLink: {confirmedListing.Link}";
 
-                    await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                        await Emails.SendEmail(emailSubject, emailText, emailHtml, log);
+                    }
+
+                    alerts[confirmedListing.ListingNumber] = (confirmedListing.BidCount, confirmedListing.CurrentPrice);
+                    return true;
                 }
-
-                alerts[ebayListing.ListingNumber] = (ebayListing.BidCount, ebayListing.CurrentPrice);
-                return true;
             }
 
             return false;
