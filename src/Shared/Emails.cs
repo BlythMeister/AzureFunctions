@@ -80,6 +80,11 @@ public static class Emails
             sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), false, subject));
         }
 
+        if (sends.Count > 25)
+        {
+            sends = sends.TakeLast(25).ToList();
+        }
+
         await Blobs.WriteAppDataBlob(sends, "emails.dat", log);
     }
 }
