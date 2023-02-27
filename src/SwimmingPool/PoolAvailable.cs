@@ -18,12 +18,19 @@ namespace SwimmingPool
     public class PoolAvailable
     {
         [FunctionName("PoolAvailableTimer")]
-        public static async Task RunTimer([TimerTrigger("0 */15 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunTimer([TimerTrigger("0 */10 * * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.UtcNow);
             try
             {
-                await NotifyAvailableDates(log);
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TIMER"), out var notify) && notify)
+                {
+                    await NotifyAvailableDates(log);
+                }
+                else
+                {
+                    log.LogWarning("Timer checker is off");
+                }
             }
             catch (Exception e)
             {
@@ -54,8 +61,8 @@ namespace SwimmingPool
             log.LogInformation("Pool All Available Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
-                var result = await GetPoolAvailableDateTimes(log);
-                return new OkObjectResult(result.Select(x => x.ToString("f")));
+                var result = (await GetGoodDates(log)).ToList();
+                return new OkObjectResult(result.Select(x => x.Good ? $"GOOD - {x.Date:f}" : $"BAD - {x.Date:f}"));
             }
             catch (Exception e)
             {
@@ -71,7 +78,7 @@ namespace SwimmingPool
             try
             {
                 var result = (await GetGoodDates(log)).ToList();
-                return new OkObjectResult(result.Select(x => x.ToString("f")));
+                return new OkObjectResult(result.Where(x => x.Good).Select(x => x.Date.ToString("f")));
             }
             catch (Exception e)
             {
@@ -92,31 +99,48 @@ namespace SwimmingPool
                 await Blobs.WriteAppDataBlob(sentDates, "data.dat", log);
             }
 
-            result.RemoveAll(x => sentDates.Contains(x));
+            result.RemoveAll(x => sentDates.Contains(x.Date));
 
             if (result.Any())
             {
                 var message = new StringBuilder();
 
-                message.AppendLine($"There are {result.Count} new good swimming slots:");
-                foreach (var goodDate in result)
+                var goodDates = result.Where(x => x.Good).Select(x => x.Date).ToList();
+                var badDates = result.Where(x => !x.Good).Select(x => x.Date).ToList();
+
+                message.AppendLine($"There are {goodDates.Count} new good and {badDates.Count} new bad swimming slots:");
+
+                if (result.Any(x => x.Good))
                 {
-                    message.AppendLine($" - {goodDate:f}");
+                    message.AppendLine("Good slots:");
+                    foreach (var goodDate in goodDates)
+                    {
+                        message.AppendLine($" - {goodDate:f}");
+                    }
+                }
+
+                if (result.Any(x => !x.Good))
+                {
+                    message.AppendLine($"Bad slots:");
+                    foreach (var badDate in badDates)
+                    {
+                        message.AppendLine($" - {badDate:f}");
+                    }
                 }
 
                 message.AppendLine($"Click to book: {Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS")}");
 
-                await Emails.SendEmail($"{result.Count} New Good Pool Dates Available", message.ToString(), log);
+                await Emails.SendEmail($"{result.Count} New Pool Dates Available", message.ToString(), log);
 
-                sentDates.AddRange(result);
+                sentDates.AddRange(result.Select(x => x.Date));
                 await Blobs.WriteAppDataBlob(sentDates, "data.dat", log);
             }
         }
 
-        private static async Task<IEnumerable<DateTime>> GetGoodDates(ILogger log)
+        private static async Task<IEnumerable<(DateTime Date, bool Good)>> GetGoodDates(ILogger log)
         {
             var dates = await GetPoolAvailableDateTimes(log);
-            var goodDates = new List<DateTime>();
+            var goodBadDates = new List<(DateTime Date, bool Good)>();
 
             foreach (var date in dates)
             {
@@ -133,15 +157,16 @@ namespace SwimmingPool
                 if (goodDate)
                 {
                     log.LogInformation("Good Date :) - {date:f}", date);
-                    goodDates.Add(date);
+                    goodBadDates.Add((date, true));
                 }
                 else
                 {
                     log.LogInformation("Bad Date :( - {date:f}", date);
+                    goodBadDates.Add((date, false));
                 }
             }
 
-            return goodDates;
+            return goodBadDates;
         }
 
         private static async Task<List<DateTime>> GetPoolAvailableDateTimes(ILogger log)

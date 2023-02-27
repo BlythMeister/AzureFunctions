@@ -80,10 +80,7 @@ public static class Emails
             sends.Add(new SendData(DateTime.UtcNow, destinationType.ToString(), false, subject));
         }
 
-        if (sends.Count > 25)
-        {
-            sends = sends.TakeLast(25).ToList();
-        }
+        sends = sends.OrderByDescending(x => x.SentTime).Take(Math.Min(25, sends.Count)).ToList();
 
         await Blobs.WriteAppDataBlob(sends, "emails.dat", log);
     }

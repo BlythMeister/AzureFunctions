@@ -27,7 +27,14 @@ namespace eBayNotifier
             log.LogInformation("eBay Notifier Timer function executed at: {Date}", DateTime.UtcNow);
             try
             {
-                await SendAlerts(log);
+                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TIMER"), out var notify) && notify)
+                {
+                    await SendAlerts(log);
+                }
+                else
+                {
+                    log.LogWarning("Timer checker is off");
+                }
             }
             catch (Exception e)
             {
@@ -124,8 +131,10 @@ namespace eBayNotifier
                 KeepAlive = false,
             };
 
-            log.LogInformation($"Browser navigate to {url}");
-            return await browser.NavigateToPageAsync(new Uri(url));
+            log.LogInformation("Browser navigate to {url}", url);
+            var page = await browser.NavigateToPageAsync(new Uri(url));
+            log.LogInformation("Navigated to page, content length: {length}", page.Content.Length);
+            return page;
         }
 
         private static async Task<EbayListing> Refresh(EbayListing listing, ILogger log)
@@ -136,7 +145,7 @@ namespace eBayNotifier
         private static async Task<EbayListing> GetListing(string itemNumber, ILogger log)
         {
             var page = await LoadPage($"https://www.ebay.co.uk/itm/{itemNumber}", log);
-
+            log.LogInformation("Listing Page Content: {content}", page.Content);
             var imageLink = page.Find("meta", By.Name("twitter:image")).FirstOrDefault()?.Attributes["content"]?.Value; ;
             var title = page.Find("meta", By.Name("twitter:title")).FirstOrDefault()?.Attributes["content"]?.Value;
 
@@ -173,10 +182,11 @@ namespace eBayNotifier
             var url = $"https://www.ebay.co.uk/sch/i.html?_sofindtype=0&_byseller=1&_fss=1&_fsradio=%26LH_SpecificSeller%3D1&_saslop=1&_sasl={checkUser}&_sop=1&_ipg={checkMax}&_dmd=1";
             log.LogInformation("Getting ebay listings from {url}", url);
             var page = await LoadPage(url, log);
+            log.LogInformation("Search Page Content: {content}", page.Content);
 
             foreach (var itemNode in page.Find("div", By.Class("s-item__wrapper")))
             {
-                log.LogDebug("Node: {node}", itemNode.ToString());
+                log.LogInformation("ItemNode: {node}", itemNode.ToString());
 
                 var itemLink = itemNode.CssSelect("div.s-item__image a").FirstOrDefault()?.Attributes["href"]?.Value;
 
