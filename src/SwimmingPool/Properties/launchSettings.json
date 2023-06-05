@@ -1,0 +1,13 @@
+{
+  "profiles": {
+    "SwimmingPool": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "POOL_URL_BASE": "https://www.poolpartyhailsham.co.uk",
+        "POOL_CHECK_YEAR": "2023",
+        "POOL_URL_BOOKINGS": "https://www.poolpartyhailsham.co.uk/bookings",
+        "POOL_URL_POST": "https://www.poolpartyhailsham.co.uk/wp-admin/admin-ajax.php"
+      }
+    }
+  }
+}

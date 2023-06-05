@@ -20,7 +20,7 @@ namespace SwimmingPool
     public class PoolAvailable
     {
         [FunctionName("PoolAvailableTimer")]
-        public static async Task RunTimer([TimerTrigger("0 */10 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunTimer([TimerTrigger("0 */20 * * * *")] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.UtcNow);
             try
@@ -80,7 +80,7 @@ namespace SwimmingPool
             try
             {
                 var result = await GetPoolDateTimes(log);
-                return new OkObjectResult(result.Select(x => x.Available != "0" ? $"AVAILABLE - {x.Slot:f}" : $"NOT AVAILABLE - {x.Slot:f}"));
+                return new OkObjectResult(result.Select(x => x.Available ? $"AVAILABLE - {x.Slot:f}" : $"NOT AVAILABLE - {x.Slot:f}"));
             }
             catch (Exception e)
             {
@@ -95,7 +95,7 @@ namespace SwimmingPool
             log.LogInformation("Pool All Available Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
-                var result = (await GetGoodBadDates(log)).ToList();
+                var result = (await GetGoodBadAvailableDates(log, false)).ToList();
                 return new OkObjectResult(result.Select(x => x.Good ? $"GOOD - {x.Date:f}" : $"BAD - {x.Date:f}"));
             }
             catch (Exception e)
@@ -111,7 +111,7 @@ namespace SwimmingPool
             log.LogInformation("Pool Good Available Web function executed at: {Date}", DateTime.UtcNow);
             try
             {
-                var result = (await GetGoodBadDates(log)).ToList();
+                var result = (await GetGoodBadAvailableDates(log, false)).ToList();
                 return new OkObjectResult(result.Where(x => x.Good).Select(x => x.Date.ToString("f")));
             }
             catch (Exception e)
@@ -123,13 +123,15 @@ namespace SwimmingPool
 
         private static async Task NotifyAvailableDates(ILogger log)
         {
-            var result = (await GetGoodBadDates(log)).ToList();
+            var result = (await GetGoodBadAvailableDates(log, true)).ToList();
+
+            result.RemoveAll(x => x.Date.Date <= DateTime.UtcNow.Date);
 
             var sentDates = await Blobs.ReadAppDataBlob<List<DateTime>>("data.dat", log);
 
-            if (sentDates.Any(x => x < DateTime.UtcNow))
+            if (sentDates.Any(x => x.Date.Date <= DateTime.UtcNow.Date))
             {
-                sentDates.RemoveAll(x => x < DateTime.UtcNow);
+                sentDates.RemoveAll(x => x.Date.Date <= DateTime.UtcNow.Date);
                 await Blobs.WriteAppDataBlob(sentDates, "data.dat", log);
             }
 
@@ -162,8 +164,6 @@ namespace SwimmingPool
                     }
                 }
 
-                message.AppendLine($"Click to book: {Environment.GetEnvironmentVariable("POOL_URL_BOOKINGS")}");
-
                 await Emails.SendEmail($"{result.Count} New Pool Dates Available", message.ToString(), log);
 
                 sentDates.AddRange(result.Select(x => x.Date));
@@ -171,32 +171,42 @@ namespace SwimmingPool
             }
         }
 
-        private static async Task<IEnumerable<(DateTime Date, bool Good)>> GetGoodBadDates(ILogger log)
+        private static async Task<IEnumerable<(DateTime Date, bool Good)>> GetGoodBadAvailableDates(ILogger log, bool notifyNoDates)
         {
-            var dates = await GetPoolAvailableDateTimes(log);
+            var dates = await GetPoolDateTimes(log);
             var goodBadDates = new List<(DateTime Date, bool Good)>();
 
-            foreach (var date in dates)
+            if (!dates.Any())
             {
-                var goodDate = false;
-                log.LogInformation("Checking {date:f}", date);
-                if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+                if (notifyNoDates)
                 {
-                    if (date.TimeOfDay >= TimeSpan.Parse("10:00") && date.TimeOfDay <= TimeSpan.Parse("14:30"))
+                    await Emails.SendEmail("POOL CHECK WARNING", "Found no dates when checking", log);
+                }
+            }
+            else
+            {
+                foreach (var date in dates.Where(x => x.Available).Select(x => x.Slot))
+                {
+                    var goodDate = false;
+                    log.LogInformation("Checking {date:f}", date);
+                    if (date.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
                     {
-                        goodDate = true;
+                        if (date.TimeOfDay >= TimeSpan.Parse("10:00") && date.TimeOfDay <= TimeSpan.Parse("14:30"))
+                        {
+                            goodDate = true;
+                        }
                     }
-                }
 
-                if (goodDate)
-                {
-                    log.LogInformation("Good Date :) - {date:f}", date);
-                    goodBadDates.Add((date, true));
-                }
-                else
-                {
-                    log.LogInformation("Bad Date :( - {date:f}", date);
-                    goodBadDates.Add((date, false));
+                    if (goodDate)
+                    {
+                        log.LogInformation("Good Date - {date:f}", date);
+                        goodBadDates.Add((date, true));
+                    }
+                    else
+                    {
+                        log.LogInformation("Bad Date - {date:f}", date);
+                        goodBadDates.Add((date, false));
+                    }
                 }
             }
 
@@ -224,17 +234,17 @@ namespace SwimmingPool
                     {"Accept", "*/*" },
                     { "Accept-Encoding", "gzip, deflate, br" }
                 },
-                Timeout = TimeSpan.FromMinutes(10)
+                Timeout = TimeSpan.FromMinutes(1)
             };
 
             var content = new FormUrlEncodedContent(new List<KeyValuePair<string, string>>
-            {
-                new("action", "dopbsp_calendar_schedule_get"),
-                new("dopbsp_frontend_ajax_request", "true"),
-                new("id", "1"),
-                new("year", Environment.GetEnvironmentVariable("POOL_CHECK_YEAR")),
-                new("firstYear", "\"false\""),
-            });
+                {
+                    new("action", "dopbsp_calendar_schedule_get"),
+                    new("dopbsp_frontend_ajax_request", "true"),
+                    new("id", "1"),
+                    new("year", Environment.GetEnvironmentVariable("POOL_CHECK_YEAR")),
+                    new("firstYear", "\"false\""),
+                });
 
             log.LogInformation("Calling for available");
             var result = await client.PostAsync(Environment.GetEnvironmentVariable("POOL_URL_POST"), content);
@@ -253,43 +263,31 @@ namespace SwimmingPool
             throw new Exception($"Non Success Status Code {result.StatusCode} ({(int)result.StatusCode})");
         }
 
-        private static async Task<List<(DateTime Slot, string Available)>> GetPoolDateTimes(ILogger log)
+        private static async Task<List<(DateTime Slot, bool Available)>> GetPoolDateTimes(ILogger log)
         {
-            var sessions = new List<(DateTime Slot, string Available)>();
+            var sessions = new List<(DateTime Slot, bool Available)>();
 
             var resultContent = await GetRawData(log);
 
             var obj = JObject.Parse(resultContent);
 
-            foreach (var dateItem in obj.Children().Select(x => x.ToObject<JProperty>()))
+            foreach (var dateItem in obj.Children<JProperty>())
             {
                 var date = dateItem.Name;
                 var dateO = JObject.Parse(dateItem.Value.ToObject<JValue>().Value.ToString());
-                foreach (var hourItem in dateO.Value<JObject>("hours").Children().Select(x => x.ToObject<JProperty>()))
+                foreach (var hourItem in dateO.Value<JObject>("hours").Children<JProperty>())
                 {
                     var hour = hourItem.Name;
                     var hourO = JObject.Parse(hourItem.Value.ToString());
                     var available = hourO.Value<string>("available");
-                    if (DateTime.TryParse($"{date}T{hour}", out var parsedDate) && parsedDate >= DateTime.UtcNow)
+                    if (DateTime.TryParse($"{date}T{hour}", out var parsedDate))
                     {
-                        sessions.Add((parsedDate, available));
+                        sessions.Add((parsedDate, available != "0"));
                     }
                 }
             }
 
-            if (!sessions.Any())
-            {
-                await Emails.SendEmail("POOL CHECK WARNING", "Found no dates when checking", log);
-            }
-
             return sessions;
-        }
-
-        private static async Task<List<DateTime>> GetPoolAvailableDateTimes(ILogger log)
-        {
-            var sessions = await GetPoolDateTimes(log);
-
-            return sessions.Where(x => x.Available != "0").Select(x => x.Slot).ToList();
         }
     }
 }
