@@ -20,24 +20,40 @@ namespace SwimmingPool
     public class PoolAvailable
     {
         [FunctionName("PoolAvailableTimer")]
-        public static async Task RunTimer([TimerTrigger("0 */20 * * * *")] TimerInfo myTimer, ILogger log)
+        public static async Task RunTimer([TimerTrigger("0 */20 * * * *", RunOnStartup = true)] TimerInfo myTimer, ILogger log)
         {
             log.LogInformation("Pool Available Timer function executed at: {Date}", DateTime.UtcNow);
-            try
+
+            if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TIMER"), out var notify) && notify)
             {
-                if (bool.TryParse(Environment.GetEnvironmentVariable("NOTIFY_TIMER"), out var notify) && notify)
+                var attempt = 0;
+                while (attempt < 10)
                 {
-                    await NotifyAvailableDates(log);
-                }
-                else
-                {
-                    log.LogWarning("Timer checker is off");
+                    attempt++;
+                    try
+                    {
+                        log.LogInformation("Notify dates attempt {Attempt}", attempt);
+                        await NotifyAvailableDates(log);
+                        break;
+                    }
+                    catch (Exception e) when (attempt >= 7)
+                    {
+                        log.LogError(e, "Error in check/email");
+                        await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}", log);
+                        break;
+                    }
+                    catch (Exception e)
+                    {
+                        var exponent = Math.Pow(2, attempt);
+                        var delay = TimeSpan.FromSeconds(10 * exponent);
+                        log.LogWarning(e, "Error in check/email on attempt {Attempt}, will retry in {Delay} seconds", attempt, delay.TotalSeconds);
+                        await Task.Delay(delay);
+                    }
                 }
             }
-            catch (Exception e)
+            else
             {
-                log.LogError(e, "Error in check/email");
-                await Emails.SendEmail("POOL CHECK ERROR", $"Error running pool check:\r\n{e}", log);
+                log.LogWarning("Timer checker is off");
             }
         }
 
@@ -249,18 +265,32 @@ namespace SwimmingPool
             log.LogInformation("Calling for available");
             var result = await client.PostAsync(Environment.GetEnvironmentVariable("POOL_URL_POST"), content);
             log.LogInformation("Got result status {Status}", result.StatusCode);
+            string resultContent = null;
+            try
+            {
+                resultContent = await result.Content.ReadAsStringAsync();
+            }
+            catch (Exception e) when (result.IsSuccessStatusCode)
+            {
+                throw new Exception("No content on success status", e);
+            }
+
             if (result.IsSuccessStatusCode)
             {
-                var resultContent = await result.Content.ReadAsStringAsync();
                 if (string.IsNullOrWhiteSpace(resultContent))
                 {
-                    throw new Exception("No content");
+                    throw new Exception("No content on success status");
                 }
 
                 return resultContent;
             }
 
-            throw new Exception($"Non Success Status Code {result.StatusCode} ({(int)result.StatusCode})");
+            if (string.IsNullOrEmpty(resultContent))
+            {
+                throw new Exception($"Non Success Status Code {result.StatusCode} ({(int)result.StatusCode})");
+            }
+
+            throw new Exception($"Non Success Status Code {result.StatusCode} ({(int)result.StatusCode})\nContent:{resultContent}");
         }
 
         private static async Task<List<(DateTime Slot, bool Available)>> GetPoolDateTimes(ILogger log)
